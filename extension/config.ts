@@ -1,6 +1,17 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
+export interface TaskDescription {
+  name: string;
+  description: string;
+}
+
+export interface TaskDescriptions {
+  complex: TaskDescription[];
+  medium: TaskDescription[];
+  easy: TaskDescription[];
+}
+
 export interface RouterModels {
   selector: string;
   complex: string;
@@ -13,9 +24,31 @@ export interface RouterConfig {
   models: RouterModels;
   summarizeOnEverySwitch: boolean;
   maxRecentTurns: number;
+  taskDescriptions: TaskDescriptions;
 }
 
+export type Tier = "complex" | "medium" | "easy";
 export type ConfigSource = "env" | "project" | "default";
+
+export const DEFAULT_TASK_DESCRIPTIONS: TaskDescriptions = Object.freeze({
+  complex: Object.freeze([
+    { name: "architecture", description: "Designing systems, planning multi-file refactors, structuring new projects" },
+    { name: "complex-debugging", description: "Debugging issues that span multiple files or require deep reasoning" },
+    { name: "review", description: "Reviewing code changes, features, or large parts of the codebase for quality and correctness" },
+    { name: "multi-step-refactoring", description: "Refactoring that touches many files or requires careful coordination" },
+  ]) as TaskDescription[],
+  medium: Object.freeze([
+    { name: "feature-implementation", description: "Adding or modifying functionality across one or a few files" },
+    { name: "moderate-coding", description: "Coding tasks that require some thought but are well-scoped" },
+    { name: "file-modifications", description: "Editing existing files with clear intent" },
+  ]) as TaskDescription[],
+  easy: Object.freeze([
+    { name: "simple-question", description: "Quick explanations, conceptual questions, how something works" },
+    { name: "formatting", description: "Reformatting, renaming, minor style changes" },
+    { name: "single-file-change", description: "Small edits confined to a single file" },
+    { name: "commit", description: "Writing commit messages, running git commands" },
+  ]) as TaskDescription[],
+}) as TaskDescriptions;
 
 export const DEFAULT_CONFIG: RouterConfig = Object.freeze({
   models: Object.freeze({
@@ -27,6 +60,7 @@ export const DEFAULT_CONFIG: RouterConfig = Object.freeze({
   }),
   summarizeOnEverySwitch: true,
   maxRecentTurns: 2,
+  taskDescriptions: DEFAULT_TASK_DESCRIPTIONS,
 }) as RouterConfig;
 
 export function loadConfig(cwd: string): { config: RouterConfig; source: ConfigSource } {
@@ -93,6 +127,13 @@ function validateAndMerge(parsed: unknown): RouterConfig | undefined {
     result.maxRecentTurns = raw.maxRecentTurns;
   }
 
+  // Validate and merge taskDescriptions
+  if ("taskDescriptions" in raw) {
+    const td = validateTaskDescriptions(raw.taskDescriptions);
+    if (!td) return undefined;
+    result.taskDescriptions = td;
+  }
+
   // Validate and merge models
   if ("models" in raw) {
     if (typeof raw.models !== "object" || raw.models === null || Array.isArray(raw.models)) {
@@ -121,6 +162,60 @@ function validateAndMerge(parsed: unknown): RouterConfig | undefined {
     }
 
     result.models = models;
+  }
+
+  return result;
+}
+
+const VALID_TIERS = ["complex", "medium", "easy"] as const;
+
+function validateTaskDescriptions(raw: unknown): TaskDescriptions | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    console.error("[dynamic-model-router] taskDescriptions must be an object");
+    return undefined;
+  }
+
+  const obj = raw as Record<string, unknown>;
+  const result: TaskDescriptions = { ...DEFAULT_CONFIG.taskDescriptions };
+
+  for (const tier of VALID_TIERS) {
+    if (tier in obj) {
+      const arr = obj[tier];
+      if (!Array.isArray(arr)) {
+        console.error(`[dynamic-model-router] taskDescriptions.${tier} must be an array`);
+        return undefined;
+      }
+      if (arr.length === 0) {
+        console.error(`[dynamic-model-router] taskDescriptions.${tier} must have at least one entry`);
+        return undefined;
+      }
+      const descriptions: TaskDescription[] = [];
+      for (let i = 0; i < arr.length; i++) {
+        const entry = arr[i];
+        if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+          console.error(`[dynamic-model-router] taskDescriptions.${tier}[${i}] must be an object`);
+          return undefined;
+        }
+        const e = entry as Record<string, unknown>;
+        if (typeof e.name !== "string" || !e.name.trim()) {
+          console.error(`[dynamic-model-router] taskDescriptions.${tier}[${i}].name must be a non-empty string`);
+          return undefined;
+        }
+        if (typeof e.description !== "string" || !e.description.trim()) {
+          console.error(`[dynamic-model-router] taskDescriptions.${tier}[${i}].description must be a non-empty string`);
+          return undefined;
+        }
+        descriptions.push({ name: e.name.trim(), description: e.description.trim() });
+      }
+      result[tier] = descriptions;
+    }
+  }
+
+  // Warn about unknown keys
+  for (const key of Object.keys(obj)) {
+    if (!VALID_TIERS.includes(key as Tier)) {
+      console.warn(`[dynamic-model-router] Unknown key in taskDescriptions: ${key}`);
+    }
   }
 
   return result;

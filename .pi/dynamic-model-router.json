@@ -7,5 +7,24 @@
     "summarization": "opencode-go/deepseek-v4-flash"
   },
   "summarizeOnEverySwitch": true,
-  "maxRecentTurns": 2
+  "maxRecentTurns": 2,
+  "taskDescriptions": {
+    "complex": [
+      { "name": "architecture", "description": "Designing systems, planning multi-file refactors, structuring new projects" },
+      { "name": "complex-debugging", "description": "Debugging issues that span multiple files or require deep reasoning" },
+      { "name": "review", "description": "Reviewing code changes, features, or large parts of the codebase for quality and correctness" },
+      { "name": "multi-step-refactoring", "description": "Refactoring that touches many files or requires careful coordination" },
+      { "name": "feature-implementation", "description": "Adding or modifying functionality across multiple files" }
+    ],
+    "medium": [
+      { "name": "moderate-coding", "description": "Coding tasks that require some thought but are well-scoped" },
+      { "name": "file-modifications", "description": "Editing multiple existing files with clear intent" }
+    ],
+    "easy": [
+      { "name": "simple-question", "description": "Quick explanations, conceptual questions, how something works" },
+      { "name": "formatting", "description": "Reformatting, renaming, minor style changes" },
+      { "name": "single-file-change", "description": "Small edits confined to a single file" },
+      { "name": "commit", "description": "Writing commit messages, running git commands" }
+    ]
+  }
 }
