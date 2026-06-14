@@ -31,6 +31,11 @@ Create `.pi/dynamic-model-router.json` in your project directory (or set the `PI
     "easy": "opencode-go/deepseek-v4-flash",
     "summarization": "opencode-go/deepseek-v4-flash"
   },
+  "thinkingLevel": {
+    "complex": "high",
+    "medium": "medium",
+    "easy": "off"
+  },
   "summarizeOnEverySwitch": true,
   "maxRecentTurns": 2,
   "taskDescriptions": {
@@ -55,6 +60,9 @@ Create `.pi/dynamic-model-router.json` in your project directory (or set the `PI
 | `models.medium` | Model for moderate coding tasks |
 | `models.easy` | Model for simple questions, formatting, explanations |
 | `models.summarization` | Model for compressing prior context |
+| `thinkingLevel.complex` | Thinking depth for complex tasks (one of: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`) |
+| `thinkingLevel.medium` | Thinking depth for medium tasks |
+| `thinkingLevel.easy` | Thinking depth for easy tasks |
 | `summarizeOnEverySwitch` | If true, summarize on every model switch; if false, only when context exceeds 100k tokens |
 | `maxRecentTurns` | Number of recent user+assistant turns kept verbatim (not summarized) |
 | `taskDescriptions` | Per-tier task descriptions used to build the selector prompt (see below) |
@@ -88,7 +96,7 @@ After installation, the extension works automatically. Each prompt is classified
 
 Commands:
 
-- `/router` -- Display current configuration and status (current model, turn count, active tiers).
+- `/router` -- Display current configuration and status (current model, turn count, thinking levels per tier, active tiers).
 
 ## Context-Aware Routing
 
@@ -115,9 +123,10 @@ This allows the selector to understand conversation flow. For example:
 
 ## Key Behaviors
 
-- **First turn**: Always routed to the selector's chosen model. No summarization.
+- **First turn**: Always routed to the selector's chosen model with the tier's configured thinking level. No summarization.
 - **Same model twice**: All messages pass through unchanged -- no summarization.
 - **Model switch**: Prior conversation is summarized and prepended to the current prompt.
+- **Thinking level**: Set per-tier in config. Applied automatically after each model switch. Clamped to model capabilities by pi.
 - **Non-interactive sources** (RPC, steer, follow-up): Pass through without routing.
 - **Selector or task model unavailable**: Warning notification; the current model is retained.
 - **Summarization failure**: Messages pass through unfiltered (graceful degradation).

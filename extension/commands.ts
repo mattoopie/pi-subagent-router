@@ -55,6 +55,7 @@ export function registerCommands(
         `Models: complex=${config.models.complex}, medium=${config.models.medium}, easy=${config.models.easy}`,
         `Summarization: ${config.models.summarization}`,
         `Turn: ${state.turnCount}, Current model: ${ctx.model?.id ?? "none"}`,
+        `Thinking levels: complex=${config.thinkingLevel.complex}, medium=${config.thinkingLevel.medium}, easy=${config.thinkingLevel.easy}`,
         `Summarize on switch: ${config.summarizeOnEverySwitch}`,
         `Max recent turns: ${config.maxRecentTurns}`,
         "Task descriptions:",

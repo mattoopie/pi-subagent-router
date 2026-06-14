@@ -6,6 +6,11 @@
     "easy": "opencode-go/deepseek-v4-flash",
     "summarization": "opencode-go/deepseek-v4-flash"
   },
+  "thinkingLevel": {
+    "complex": "high",
+    "medium": "medium",
+    "easy": "low"
+  },
   "summarizeOnEverySwitch": true,
   "maxRecentTurns": 2,
   "taskDescriptions": {

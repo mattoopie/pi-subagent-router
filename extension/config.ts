@@ -1,3 +1,4 @@
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -22,10 +23,13 @@ export interface RouterModels {
 
 export interface RouterConfig {
   models: RouterModels;
+  thinkingLevel: ThinkingLevels;
   summarizeOnEverySwitch: boolean;
   maxRecentTurns: number;
   taskDescriptions: TaskDescriptions;
 }
+
+export type ThinkingLevels = Record<Tier, ThinkingLevel>;
 
 export type Tier = "complex" | "medium" | "easy";
 export type ConfigSource = "env" | "project" | "default";
@@ -50,6 +54,16 @@ export const DEFAULT_TASK_DESCRIPTIONS: TaskDescriptions = Object.freeze({
   ]) as TaskDescription[],
 }) as TaskDescriptions;
 
+export const DEFAULT_THINKING_LEVELS: ThinkingLevels = Object.freeze({
+  complex: "high",
+  medium: "medium",
+  easy: "off",
+}) as ThinkingLevels;
+
+export const VALID_THINKING_LEVELS: readonly ThinkingLevel[] = Object.freeze([
+  "off", "minimal", "low", "medium", "high", "xhigh",
+]) as ThinkingLevel[];
+
 export const DEFAULT_CONFIG: RouterConfig = Object.freeze({
   models: Object.freeze({
     selector: "opencode-go/deepseek-v4-flash",
@@ -58,6 +72,7 @@ export const DEFAULT_CONFIG: RouterConfig = Object.freeze({
     easy: "opencode-go/deepseek-v4-flash",
     summarization: "opencode-go/deepseek-v4-flash",
   }),
+  thinkingLevel: DEFAULT_THINKING_LEVELS,
   summarizeOnEverySwitch: true,
   maxRecentTurns: 2,
   taskDescriptions: DEFAULT_TASK_DESCRIPTIONS,
@@ -109,6 +124,13 @@ function validateAndMerge(parsed: unknown): RouterConfig | undefined {
 
   const raw = parsed as Record<string, unknown>;
   const result: RouterConfig = { ...DEFAULT_CONFIG };
+
+  // Validate and merge thinkingLevel
+  if ("thinkingLevel" in raw) {
+    const tl = validateThinkingLevels(raw.thinkingLevel);
+    if (!tl) return undefined;
+    result.thinkingLevel = tl;
+  }
 
   // Validate and merge top-level boolean/number fields
   if ("summarizeOnEverySwitch" in raw) {
@@ -162,6 +184,38 @@ function validateAndMerge(parsed: unknown): RouterConfig | undefined {
     }
 
     result.models = models;
+  }
+
+  return result;
+}
+
+function validateThinkingLevels(raw: unknown): ThinkingLevels | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    console.error("[dynamic-model-router] thinkingLevel must be an object");
+    return undefined;
+  }
+
+  const obj = raw as Record<string, unknown>;
+  const result: ThinkingLevels = { ...DEFAULT_THINKING_LEVELS };
+
+  for (const tier of VALID_TIERS) {
+    if (tier in obj) {
+      const val = obj[tier];
+      if (typeof val !== "string" || !VALID_THINKING_LEVELS.includes(val as ThinkingLevel)) {
+        console.error(
+          `[dynamic-model-router] thinkingLevel.${tier} must be one of: ${VALID_THINKING_LEVELS.join(", ")}`,
+        );
+        return undefined;
+      }
+      result[tier] = val as ThinkingLevel;
+    }
+  }
+
+  // Warn about unknown keys
+  for (const key of Object.keys(obj)) {
+    if (!VALID_TIERS.includes(key as Tier)) {
+      console.warn(`[dynamic-model-router] Unknown key in thinkingLevel: ${key}`);
+    }
   }
 
   return result;

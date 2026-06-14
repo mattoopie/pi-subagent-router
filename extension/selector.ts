@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { complete } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { BorderedLoader, buildSessionContext } from "@earendil-works/pi-coding-agent";
@@ -127,7 +127,7 @@ function extractTier(response: { content: Array<{ type: string; text?: string }>
  * 3. Call the selector model to classify complexity
  * 4. Resolve and switch to the appropriate task model
  *
- * Returns `{ tier, taskModelId }` on success, `null` on any failure.
+ * Returns `{ tier, taskModelId, thinkingLevel }` on success, `null` on any failure.
  * Shows loader UI and user-facing notifications for errors.
  */
 export async function runSelector(
@@ -135,7 +135,7 @@ export async function runSelector(
   ctx: ExtensionContext,
   config: RouterConfig,
   userPrompt: string,
-): Promise<{ tier: Tier; taskModelId: string } | null> {
+): Promise<{ tier: Tier; taskModelId: string; thinkingLevel: ThinkingLevel } | null> {
   const selectorModel = resolveModel(ctx, config.models.selector);
   if (!selectorModel) {
     ctx.ui.notify("Router: selector model not found, using current model", "warning");
@@ -149,7 +149,7 @@ export async function runSelector(
   }
 
   try {
-    return await ctx.ui.custom<{ tier: Tier; taskModelId: string } | null>(
+    return await ctx.ui.custom<{ tier: Tier; taskModelId: string; thinkingLevel: ThinkingLevel } | null>(
       (tui, theme, _kb, done) => {
         const loader = new BorderedLoader(
           tui,
@@ -197,7 +197,10 @@ export async function runSelector(
             return null;
           }
 
-          return { tier, taskModelId };
+          const thinkingLevel = config.thinkingLevel[tier];
+          pi.setThinkingLevel(thinkingLevel);
+
+          return { tier, taskModelId, thinkingLevel };
         };
 
         doSelect().then(done).catch(() => done(null));

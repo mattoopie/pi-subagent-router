@@ -68,7 +68,7 @@ export default function (pi: ExtensionAPI) {
     const result = await runSelector(pi, ctx, config, event.text);
 
     if (result) {
-      const { tier, taskModelId } = result;
+      const { tier, taskModelId, thinkingLevel } = result;
 
       if (shouldSummarize(state, config, ctx, taskModelId)) {
         state.needsSummary = true;
@@ -81,7 +81,7 @@ export default function (pi: ExtensionAPI) {
       state.previousModelId = taskModelId;
       state.currentTaskModelId = taskModelId;
 
-      ctx.ui.notify(`⚡ Model: ${taskModelId.split("/").pop()} (${tier})`, "info");
+      ctx.ui.notify(`⚡ Model: ${taskModelId.split("/").pop()} (${tier}, thinking: ${thinkingLevel})`, "info");
       ctx.ui.setStatus("router", ctx.ui.theme.fg("accent", `🔄 ${tier}`));
     } else {
       ctx.ui.notify("Router: selection cancelled or failed", "warning");
