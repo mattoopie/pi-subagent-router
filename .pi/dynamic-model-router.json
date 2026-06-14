@@ -1,0 +1,11 @@
+{
+  "models": {
+    "selector": "opencode-go/deepseek-v4-flash",
+    "complex": "opencode-go/mimo-v2.5-pro",
+    "medium": "opencode-go/mimo-v2.5-pro",
+    "easy": "opencode-go/deepseek-v4-flash",
+    "summarization": "opencode-go/deepseek-v4-flash"
+  },
+  "summarizeOnEverySwitch": true,
+  "maxRecentTurns": 2
+}

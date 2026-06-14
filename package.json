@@ -1,0 +1,14 @@
+{
+  "name": "pi-subagent-router",
+  "version": "0.0.1",
+  "description": "Pi extension that dynamically routes prompts to different models based on complexity.",
+  "keywords": ["pi-package", "pi-extension", "pi-coding-agent"],
+  "license": "MIT",
+  "type": "module",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": ["./extension/index.ts"]
+  }
+}
