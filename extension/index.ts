@@ -14,8 +14,88 @@ import { BorderedLoader, buildSessionContext, keyHint } from "@earendil-works/pi
 import { Text } from "@earendil-works/pi-tui";
 import { loadConfig, type RouterConfig, type ConfigSource, type Tier, type TaskDescriptions } from "./config.ts";
 import { generateSummary, extractRecentTurns } from "./summarizer.ts";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { join, dirname } from "node:path";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Extract text content from an AgentMessage.
+ * Returns the concatenated text from all text content blocks.
+ */
+function extractMessageText(message: AgentMessage): string | undefined {
+  const content = (message as any).content;
+  if (!content) return undefined;
+
+  // Handle string content (UserMessage can have string content)
+  if (typeof content === "string") return content;
+
+  // Handle array content
+  if (Array.isArray(content)) {
+    const textParts = content
+      .filter((c: any) => c.type === "text" && typeof c.text === "string")
+      .map((c: any) => c.text as string);
+    return textParts.length > 0 ? textParts.join("\n") : undefined;
+  }
+
+  return undefined;
+}
+
+/**
+ * Extract the previous user message and last assistant message from session context.
+ * Returns formatted context with clear markers for the selector model.
+ */
+function extractPreviousTurnContext(
+  messages: AgentMessage[],
+  currentPrompt: string,
+): string {
+  if (messages.length === 0) return currentPrompt;
+
+  // Walk backwards to find the most recent assistant message and user message
+  // that are NOT the current prompt
+  let lastAssistantText: string | undefined;
+  let lastUserText: string | undefined;
+
+  // We walk backwards through messages to find the previous turn.
+  // The current user prompt hasn't been added to messages yet, so we look
+  // for the most recent user+assistant pair.
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    const role = (msg as any).role;
+
+    if (role === "assistant" && !lastAssistantText) {
+      lastAssistantText = extractMessageText(msg);
+    } else if (role === "user" && !lastUserText) {
+      lastUserText = extractMessageText(msg);
+    }
+
+    // Stop once we have both
+    if (lastAssistantText && lastUserText) break;
+  }
+
+  // If no previous context found, just return the current prompt
+  if (!lastAssistantText && !lastUserText) return currentPrompt;
+
+  // Build the enriched prompt with clear markers
+  const parts: string[] = [];
+
+  if (lastUserText) {
+    parts.push(`<PREVIOUS_USER_MESSAGE>\n${lastUserText}\n</PREVIOUS_USER_MESSAGE>`);
+  }
+
+  if (lastAssistantText) {
+    // Truncate long assistant messages to avoid overwhelming the selector
+    const maxLen = 2000;
+    const truncated = lastAssistantText.length > maxLen
+      ? lastAssistantText.slice(0, maxLen) + "\n... [truncated]"
+      : lastAssistantText;
+    parts.push(`<PREVIOUS_AGENT_MESSAGE>\n${truncated}\n</PREVIOUS_AGENT_MESSAGE>`);
+  }
+
+  parts.push(`<NEW_USER_PROMPT>\n${currentPrompt}\n</NEW_USER_PROMPT>`);
+
+  return parts.join("\n\n");
+}
 
 function buildSelectorPrompt(taskDescriptions: TaskDescriptions): string {
   const tiers: Tier[] = ["complex", "medium", "easy"];
@@ -29,12 +109,23 @@ function buildSelectorPrompt(taskDescriptions: TaskDescriptions): string {
   return `You are a task complexity classifier. Given a user prompt, classify it as exactly one of:
 ${tierBlocks.join("\n\n")}
 
+The user message may contain conversation context in XML markers:
+- <PREVIOUS_USER_MESSAGE>: The previous user message in the conversation
+- <PREVIOUS_AGENT_MESSAGE>: The agent's response to that message
+- <NEW_USER_PROMPT>: The current user message to classify
+
+Use the conversation context to better understand what the user is asking. For example:
+- If the previous turn was about a complex topic and the new prompt continues that thread, it may still be complex
+- If the user is asking a follow-up clarification to a simple topic, it may be easy
+- Consider the full picture, not just the isolated new prompt
+
 Respond with ONLY the tier name (complex, medium, or easy). No explanation. It is mandatory to return ONE of those words ONLY.`;
 }
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
 const STATE_ENTRY_TYPE = "router-state";
+const PERSISTENT_STATE_FILE = ".pi/router-toggle-state.json";
 
 let config: RouterConfig;
 let configSource: ConfigSource = "default";
@@ -44,6 +135,8 @@ let currentTaskModelId: string | undefined;
 let needsSummary = false;
 let pendingSummary: string | null = null;
 let stateDirty = false;
+let routerEnabled = true;
+let persistentStatePath: string | undefined;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -115,6 +208,34 @@ export default function (pi: ExtensionAPI) {
     return new Text(text, 1, 1, (s) => theme.bg("customMessageBg", s));
   });
 
+  // ── Save/load persistent toggle state ──
+  function savePersistentToggleState(enabled: boolean) {
+    if (!persistentStatePath) return;
+    try {
+      const dir = dirname(persistentStatePath);
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
+      writeFileSync(persistentStatePath, JSON.stringify({ routerEnabled: enabled }), "utf-8");
+    } catch (err) {
+      console.error("[dynamic-model-router] Failed to save toggle state:", err);
+    }
+  }
+
+  function loadPersistentToggleState(): boolean | undefined {
+    if (!persistentStatePath || !existsSync(persistentStatePath)) return undefined;
+    try {
+      const raw = readFileSync(persistentStatePath, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (typeof parsed.routerEnabled === "boolean") {
+        return parsed.routerEnabled;
+      }
+    } catch (err) {
+      console.error("[dynamic-model-router] Failed to load toggle state:", err);
+    }
+    return undefined;
+  }
+
   // ── Persist router state to session ──
   function saveState() {
     if (!stateDirty) return;
@@ -122,6 +243,7 @@ export default function (pi: ExtensionAPI) {
       turnCount,
       previousModelId,
       currentTaskModelId,
+      routerEnabled,
     });
     stateDirty = false;
   }
@@ -134,6 +256,10 @@ export default function (pi: ExtensionAPI) {
     needsSummary = false;
     pendingSummary = null;
     stateDirty = false;
+    routerEnabled = true;
+
+    // Set persistent state path based on cwd
+    persistentStatePath = join(ctx.cwd, PERSISTENT_STATE_FILE);
 
     // Restore router state from the latest saved entry
     const branch = ctx.sessionManager.getBranch();
@@ -144,14 +270,25 @@ export default function (pi: ExtensionAPI) {
           turnCount?: number;
           previousModelId?: string;
           currentTaskModelId?: string;
+          routerEnabled?: boolean;
         } | undefined;
         if (data) {
           turnCount = data.turnCount ?? 0;
           previousModelId = data.previousModelId;
           currentTaskModelId = data.currentTaskModelId;
+          // Session state takes precedence if present
+          if (data.routerEnabled !== undefined) {
+            routerEnabled = data.routerEnabled;
+          }
         }
         break;
       }
+    }
+
+    // Also check persistent file (for new sessions without session state)
+    const persistentToggle = loadPersistentToggleState();
+    if (persistentToggle !== undefined) {
+      routerEnabled = persistentToggle;
     }
 
     const loaded = loadConfig(ctx.cwd);
@@ -159,7 +296,9 @@ export default function (pi: ExtensionAPI) {
     configSource = loaded.source;
 
     // Show status based on restored state
-    if (currentTaskModelId) {
+    if (!routerEnabled) {
+      ctx.ui.setStatus("router", ctx.ui.theme.fg("dim", "⏸ router off"));
+    } else if (currentTaskModelId) {
       const tier = findTierForModel(config, currentTaskModelId);
       ctx.ui.setStatus("router", ctx.ui.theme.fg("accent", `🔄 ${tier ?? "dynamic"}`));
     } else {
@@ -175,6 +314,8 @@ export default function (pi: ExtensionAPI) {
 
   // ── Input handler: classify and route ──
   pi.on("input", async (event, ctx) => {
+    if (!routerEnabled) return { action: "continue" };
+
     // Only route interactive user prompts
     if (event.source !== "interactive") return { action: "continue" };
     if (event.streamingBehavior) return { action: "continue" };
@@ -213,6 +354,11 @@ export default function (pi: ExtensionAPI) {
             // Race the selector call against the loader's abort signal
             const combined = AbortSignal.any([selectorTimeout, loader.signal]);
 
+            // Extract previous turn context for better routing decisions
+            const branch = ctx.sessionManager.getBranch();
+            const { messages: allMessages } = buildSessionContext(branch);
+            const enrichedPrompt = extractPreviousTurnContext(allMessages, userPrompt);
+
             const response = await complete(
               selectorModel,
               {
@@ -220,7 +366,7 @@ export default function (pi: ExtensionAPI) {
                 messages: [
                   {
                     role: "user",
-                    content: [{ type: "text", text: userPrompt }],
+                    content: [{ type: "text", text: enrichedPrompt }],
                     timestamp: Date.now(),
                   },
                 ],
@@ -381,7 +527,13 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("router", {
     description: "Show dynamic model router status and config",
     handler: async (_args, ctx) => {
+      if (!routerEnabled) {
+        ctx.ui.notify("Router is OFF (use /router-toggle to enable)", "info");
+        return;
+      }
+
       const lines = [
+        "Router is ON",
         `Config source: ${configSource}`,
         `Selector: ${config.models.selector}`,
         `Models: complex=${config.models.complex}, medium=${config.models.medium}, easy=${config.models.easy}`,
@@ -396,6 +548,25 @@ export default function (pi: ExtensionAPI) {
         lines.push(`  ${tier}: ${items}`);
       }
       ctx.ui.notify(lines.join("\n"), "info");
+    },
+  });
+
+  // ── /router-toggle command ──
+  pi.registerCommand("router-toggle", {
+    description: "Toggle the dynamic model router on/off",
+    handler: async (_args, ctx) => {
+      routerEnabled = !routerEnabled;
+      stateDirty = true;
+      saveState();
+      savePersistentToggleState(routerEnabled);
+
+      if (routerEnabled) {
+        ctx.ui.notify("🔄 Router enabled", "info");
+        ctx.ui.setStatus("router", ctx.ui.theme.fg("accent", "🔄 dynamic"));
+      } else {
+        ctx.ui.notify("⏸ Router disabled", "info");
+        ctx.ui.setStatus("router", ctx.ui.theme.fg("dim", "⏸ router off"));
+      }
     },
   });
 }

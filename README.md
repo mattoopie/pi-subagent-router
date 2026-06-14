@@ -4,7 +4,7 @@ A [pi](https://github.com/earendil-works/pi) extension that dynamically routes u
 
 ## How It Works
 
-1. **Classification**: On each interactive prompt, the extension calls a cheap "selector" model to classify the task as `complex`, `medium`, or `easy`.
+1. **Context-Aware Classification**: On each interactive prompt, the extension extracts the previous user message and agent response from the conversation history. These are passed to a cheap "selector" model along with the current prompt, using clear XML markers (`<PREVIOUS_USER_MESSAGE>`, `<PREVIOUS_AGENT_MESSAGE>`, `<NEW_USER_PROMPT>`) to structure the context. This allows the selector to make better routing decisions based on conversation continuity.
 2. **Routing**: Based on the classification, the session model is switched to the corresponding task model defined in the config.
 3. **Summarization**: When the model changes between turns, the extension summarizes the prior conversation using a dedicated summarization model and prepends that summary to the current prompt, keeping the LLM context lean.
 4. **History preserved**: The full conversation history remains intact in the session file for `/tree` navigation; only the context sent to the LLM is filtered.
@@ -89,6 +89,29 @@ After installation, the extension works automatically. Each prompt is classified
 Commands:
 
 - `/router` -- Display current configuration and status (current model, turn count, active tiers).
+
+## Context-Aware Routing
+
+The selector model receives conversation context to make better routing decisions. The context is formatted with clear XML markers:
+
+```xml
+<PREVIOUS_USER_MESSAGE>
+The user's previous message in the conversation
+</PREVIOUS_USER_MESSAGE>
+
+<PREVIOUS_AGENT_MESSAGE>
+The agent's response to that message (truncated to 2000 chars if needed)
+</PREVIOUS_AGENT_MESSAGE>
+
+<NEW_USER_PROMPT>
+The current user message to classify
+</NEW_USER_PROMPT>
+```
+
+This allows the selector to understand conversation flow. For example:
+- A follow-up question to a complex topic may still need a complex model
+- A simple clarification request after a detailed explanation may only need an easy model
+- The full context helps avoid unnecessary model switches
 
 ## Key Behaviors
 
