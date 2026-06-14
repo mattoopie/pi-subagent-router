@@ -10,7 +10,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { complete } from "@earendil-works/pi-ai";
 import type { Model, Api } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { loadConfig, type RouterConfig } from "./config.ts";
+import { loadConfig, type RouterConfig, type ConfigSource } from "./config.ts";
 import { generateSummary, extractRecentTurns } from "./summarizer.ts";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -27,6 +27,7 @@ type Tier = "complex" | "medium" | "easy";
 // ─── State ───────────────────────────────────────────────────────────────────
 
 let config: RouterConfig;
+let configSource: ConfigSource = "default";
 let turnCount = 0;
 let previousModelId: string | undefined;
 let needsSummary = false;
@@ -60,9 +61,17 @@ function extractTier(response: { content: Array<{ type: string; text?: string }>
     .trim()
     .toLowerCase();
 
-  if (text.includes("complex")) return "complex";
-  if (text.includes("medium")) return "medium";
-  if (text.includes("easy")) return "easy";
+  // Extract the first word to avoid false matches from sentences like "not complex, medium"
+  const firstWord = text.split(/\s+/)[0] ?? "";
+
+  if (firstWord === "complex") return "complex";
+  if (firstWord === "medium") return "medium";
+  if (firstWord === "easy") return "easy";
+
+  // Fallback: substring match for cases where punctuation is attached (e.g. "complex.")
+  if (firstWord.includes("complex")) return "complex";
+  if (firstWord.includes("medium")) return "medium";
+  if (firstWord.includes("easy")) return "easy";
 
   // Default to medium if unclear
   console.warn(`[dynamic-model-router] Unexpected selector response: "${text}", defaulting to medium`);
@@ -88,7 +97,9 @@ export default function (pi: ExtensionAPI) {
     turnCount = 0;
     previousModelId = undefined;
     needsSummary = false;
-    config = loadConfig(ctx.cwd);
+    const loaded = loadConfig(ctx.cwd);
+    config = loaded.config;
+    configSource = loaded.source;
 
     ctx.ui.setStatus("router", ctx.ui.theme.fg("accent", "🔄 dynamic"));
   });
@@ -122,8 +133,9 @@ export default function (pi: ExtensionAPI) {
       return { action: "continue" };
     }
 
-    // 3. Call selector (standalone, outside agent loop)
+    // 3. Call selector (standalone, outside agent loop, with 10s timeout)
     try {
+      const selectorTimeout = AbortSignal.timeout(10_000);
       const response = await complete(
         selectorModel,
         {
@@ -136,7 +148,7 @@ export default function (pi: ExtensionAPI) {
             },
           ],
         },
-        { apiKey: selectorAuth.apiKey, headers: selectorAuth.headers, maxTokens: 20 },
+        { apiKey: selectorAuth.apiKey, headers: selectorAuth.headers, maxTokens: 20, signal: selectorTimeout },
       );
 
       const tier = extractTier(response);
@@ -149,22 +161,33 @@ export default function (pi: ExtensionAPI) {
         return { action: "continue" };
       }
 
-      // 5. Track model change
-      const newModelId = `${taskModel.provider}/${taskModel.id}`;
-      const modelChanged = previousModelId !== undefined && previousModelId !== newModelId;
-      if (modelChanged && turnCount > 1 && config.summarizeOnEverySwitch) {
-        needsSummary = true;
-      }
-      previousModelId = newModelId;
-
-      // 6. Switch model
+      // 5. Switch model — must succeed before updating state
       const success = await pi.setModel(taskModel);
       if (!success) {
         ctx.ui.notify(`Router: no API key for ${taskModelId}`, "warning");
         return { action: "continue" };
       }
 
+      // 6. Track model change and decide whether to summarize
+      //    Only AFTER successful switch to avoid phantom state on failure
+      const newModelId = `${taskModel.provider}/${taskModel.id}`;
+      const modelChanged = previousModelId !== undefined && previousModelId !== newModelId;
+      if (modelChanged && turnCount > 1) {
+        if (config.summarizeOnEverySwitch) {
+          needsSummary = true;
+        } else {
+          // Only summarize when context exceeds a token threshold
+          const usage = ctx.getContextUsage();
+          if (usage && usage.tokens >= 100_000) {
+            needsSummary = true;
+          }
+        }
+      }
+      previousModelId = newModelId;
+
       ctx.ui.notify(`⚡ Model: ${taskModel.id} (${tier})`, "info");
+      // Also update the footer status directly (model_select may not fire for pi.setModel)
+      ctx.ui.setStatus("router", ctx.ui.theme.fg("accent", `🔄 ${tier}`));
     } catch (err) {
       console.error("[dynamic-model-router] Selector call failed:", err);
       ctx.ui.notify("Router: selector call failed, using current model", "warning");
@@ -201,19 +224,22 @@ export default function (pi: ExtensionAPI) {
     //    This avoids consecutive user-role messages that would confuse the LLM
     const filteredMessages = [...recentMessages];
     const lastUserIdx = filteredMessages.findLastIndex((m) => m.role === "user");
-    if (lastUserIdx >= 0) {
-      const lastUser = filteredMessages[lastUserIdx];
-      const originalText = extractTextFromContent(lastUser.content);
-      filteredMessages[lastUserIdx] = {
-        ...lastUser,
-        content: [
-          {
-            type: "text",
-            text: `[Context Summary]\n${summaryText}\n\n---\n\n[Current Message]\n${originalText}`,
-          },
-        ],
-      };
+    if (lastUserIdx < 0) {
+      // No user message found — shouldn't happen, but bail out gracefully
+      return;
     }
+
+    const lastUser = filteredMessages[lastUserIdx];
+    const originalText = extractTextFromContent(lastUser.content);
+    filteredMessages[lastUserIdx] = {
+      ...lastUser,
+      content: [
+        {
+          type: "text",
+          text: `[Context Summary]\n${summaryText}\n\n---\n\n[Current Message]\n${originalText}`,
+        },
+      ],
+    };
 
     ctx.ui.notify("📝 Summarized context for model switch", "info");
     return { messages: filteredMessages };
@@ -228,7 +254,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("router", {
     description: "Show dynamic model router status and config",
     handler: async (_args, ctx) => {
-      ctx.ui.notify(`Config: ${config.models.selector ? "loaded" : "default"}`, "info");
+      ctx.ui.notify(`Config source: ${configSource}`, "info");
       ctx.ui.notify(`Selector: ${config.models.selector}`, "info");
       ctx.ui.notify(
         `Models: complex=${config.models.complex}, medium=${config.models.medium}, easy=${config.models.easy}`,
