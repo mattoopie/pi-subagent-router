@@ -12,8 +12,11 @@ A [pi](https://github.com/earendil-works/pi) extension that dynamically routes u
 ## Installation
 
 ```bash
-# From this directory
-pi install /home/marcel/projects/pi-subagent-router
+# When working on the extension
+pi install .
+
+# When installing from another project
+pi install git:github.com/mattoopie/pi-subagent-router@v1.1.0
 ```
 
 The extension loads automatically on pi startup.

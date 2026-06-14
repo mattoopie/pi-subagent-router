@@ -35,16 +35,6 @@ No circular dependencies.
 
 ## How to Work With This Repo
 
-### Install the extension
-
-```bash
-# When working on the extension
-pi install .
-
-# When installing from another project
-pi install git:github.com/mattoopie/pi-subagent-router@v1.0.0
-```
-
 The `pi.extensions` field in `package.json` points to `./extension/index.ts`. pi loads it as a TypeScript extension directly — no build step.
 
 ### Configure
