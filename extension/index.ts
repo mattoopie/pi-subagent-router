@@ -34,6 +34,8 @@ Respond with ONLY the tier name (complex, medium, or easy). No explanation. It i
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
+const STATE_ENTRY_TYPE = "router-state";
+
 let config: RouterConfig;
 let configSource: ConfigSource = "default";
 let turnCount = 0;
@@ -41,6 +43,7 @@ let previousModelId: string | undefined;
 let currentTaskModelId: string | undefined;
 let needsSummary = false;
 let pendingSummary: string | null = null;
+let stateDirty = false;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -112,18 +115,56 @@ export default function (pi: ExtensionAPI) {
     return new Text(text, 1, 1, (s) => theme.bg("customMessageBg", s));
   });
 
-  // ── Reset state and load config on session start ──
+  // ── Persist router state to session ──
+  function saveState() {
+    if (!stateDirty) return;
+    pi.appendEntry(STATE_ENTRY_TYPE, {
+      turnCount,
+      previousModelId,
+      currentTaskModelId,
+    });
+    stateDirty = false;
+  }
+
+  // ── Reconstruct state and load config on session start ──
   pi.on("session_start", async (_event, ctx) => {
     turnCount = 0;
     previousModelId = undefined;
     currentTaskModelId = undefined;
     needsSummary = false;
     pendingSummary = null;
+    stateDirty = false;
+
+    // Restore router state from the latest saved entry
+    const branch = ctx.sessionManager.getBranch();
+    for (let i = branch.length - 1; i >= 0; i--) {
+      const entry = branch[i];
+      if (entry.type === "custom" && entry.customType === STATE_ENTRY_TYPE) {
+        const data = entry.data as {
+          turnCount?: number;
+          previousModelId?: string;
+          currentTaskModelId?: string;
+        } | undefined;
+        if (data) {
+          turnCount = data.turnCount ?? 0;
+          previousModelId = data.previousModelId;
+          currentTaskModelId = data.currentTaskModelId;
+        }
+        break;
+      }
+    }
+
     const loaded = loadConfig(ctx.cwd);
     config = loaded.config;
     configSource = loaded.source;
 
-    ctx.ui.setStatus("router", ctx.ui.theme.fg("accent", "🔄 dynamic"));
+    // Show status based on restored state
+    if (currentTaskModelId) {
+      const tier = findTierForModel(config, currentTaskModelId);
+      ctx.ui.setStatus("router", ctx.ui.theme.fg("accent", `🔄 ${tier ?? "dynamic"}`));
+    } else {
+      ctx.ui.setStatus("router", ctx.ui.theme.fg("accent", "🔄 dynamic"));
+    }
   });
 
   // ── Update status on model select ──
@@ -140,6 +181,7 @@ export default function (pi: ExtensionAPI) {
 
     const userPrompt = event.text;
     turnCount++;
+    stateDirty = true;
 
     // 1. Resolve selector model
     const selectorModel = resolveModel(ctx, config.models.selector);
@@ -279,6 +321,7 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify("Router: selector call failed, using current model", "warning");
     }
 
+    saveState();
     return { action: "continue" };
   });
 
@@ -322,6 +365,11 @@ export default function (pi: ExtensionAPI) {
     if (recentMessages.length >= allMessages.length) return; // Nothing to trim
 
     return { messages: recentMessages };
+  });
+
+  // ── Persist state on session exit ──
+  pi.on("session_shutdown", async () => {
+    saveState();
   });
 
   // ── Cancel built-in compaction (we manage context ourselves) ──
