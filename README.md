@@ -100,6 +100,7 @@ After installation, the extension works automatically. Each prompt is classified
 Commands:
 
 - `/router` -- Display current configuration and status (current model, turn count, thinking levels per tier, active tiers).
+- `/router-toggle` -- Toggle routing of requests to models.
 
 ## Context-Aware Routing
 
